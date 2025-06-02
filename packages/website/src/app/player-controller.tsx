@@ -16,6 +16,25 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
     let characterOrientation = Quaternion.Identity();
     let characterGravity = new Vector3(0, -9.81, 0);
 
+    //Velocity dampening to manage sliding locomotion
+    const applyVelocityDamping = (
+        velocityToDamp: Vector3,
+        dampingFactor: number,
+        stopThreshold: number
+    ): Vector3  => {
+        let dampenedVelocity = velocityToDamp.clone();
+
+        dampenedVelocity.x *= dampingFactor;
+        dampenedVelocity.z *= dampingFactor;
+
+        if (new Vector3(dampenedVelocity.x, 0, dampenedVelocity.z).length() < stopThreshold) {
+            dampenedVelocity.x = 0;
+            dampenedVelocity.z = 0;
+        }
+        return dampenedVelocity;
+
+    };
+
 
 
     ImportMeshAsync("Adventurer.fixed.glb", scene).then(({ transformNodes, meshes, animationGroups }) => {
@@ -108,6 +127,10 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
 
         var getDesiredVelocity = function (deltaTime: any, supportInfo: any, characterOrientation: any, currentVelocity: any) {
             let nextState = getNextState(supportInfo);
+
+            //In function scope rather than "ON_GROUND" scope, incase want for other states
+            const bNoInput = inputDirection.lengthSquared() == 0;
+
             if (nextState != state) {
                 state = nextState;
             }
@@ -115,9 +138,12 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
             let upWorld = characterGravity.normalizeToNew();
             upWorld.scaleInPlace(-1.0);
             let forwardWorld = forwardLocalSpace.applyRotationQuaternion(characterOrientation);
+
+            let outputVelocity: Vector3; //Just declaring this here for cleanliness, let me know if this is annoying
+
             if (state == "IN_AIR") {
                 let desiredVelocity = inputDirection.scale(inAirSpeed).applyRotationQuaternion(characterOrientation);
-                let outputVelocity = controller.calculateMovement(deltaTime, forwardWorld, upWorld, currentVelocity, Vector3.ZeroReadOnly, desiredVelocity, upWorld);
+                outputVelocity = controller.calculateMovement(deltaTime, forwardWorld, upWorld, currentVelocity, Vector3.ZeroReadOnly, desiredVelocity, upWorld);
                 // Restore to original vertical component
                 outputVelocity.addInPlace(upWorld.scale(-outputVelocity.dot(upWorld)));
                 outputVelocity.addInPlace(upWorld.scale(currentVelocity.dot(upWorld)));
@@ -128,11 +154,26 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
                 // Move character relative to the surface we're standing on
                 // Correct input velocity to apply instantly any changes in the velocity of the standing surface and this way
                 // avoid artifacts caused by filtering of the output velocity when standing on moving objects.
-                let desiredVelocity = inputDirection.scale(onGroundSpeed).applyRotationQuaternion(characterOrientation);
+                
+                let desiredVelocity: Vector3;
 
-                let outputVelocity = controller.calculateMovement(deltaTime, forwardWorld, supportInfo.averageSurfaceNormal, currentVelocity, supportInfo.averageSurfaceVelocity, desiredVelocity, upWorld);
+                if (bNoInput) { // Dampen velocity if no input
+                    const dampingFactor = 0.01;
+                    const stopThreshold = 0.1;
+                    desiredVelocity = applyVelocityDamping(currentVelocity, dampingFactor, stopThreshold);
+                    
+                } else {
+                    desiredVelocity = inputDirection.scale(onGroundSpeed).applyRotationQuaternion(characterOrientation);
+                }
+
+
+                outputVelocity = controller.calculateMovement(deltaTime, forwardWorld, supportInfo.averageSurfaceNormal, currentVelocity, supportInfo.averageSurfaceVelocity, desiredVelocity, upWorld);
+                
+                if (bNoInput) {
+                    outputVelocity.x = 0;
+                    outputVelocity.z = 0;
+                } else {
                 // Horizontal projection
-                {
                     outputVelocity.subtractInPlace(supportInfo.averageSurfaceVelocity);
                     let inv1k = 1e-3;
                     if (outputVelocity.dot(upWorld) > inv1k) {
@@ -148,8 +189,9 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
                         outputVelocity.scaleInPlace(horizLen);
                     }
                     outputVelocity.addInPlace(supportInfo.averageSurfaceVelocity);
-                    return outputVelocity;
                 }
+                return outputVelocity;
+                    
             } else if (state == "START_JUMP") {
                 let u = Math.sqrt(2 * characterGravity.length() * jumpHeight);
                 let curRelVel = currentVelocity.dot(upWorld);
@@ -197,6 +239,7 @@ export const PlayerController = (scene: Scene, camera: FreeCamera, startPoint: V
             Quaternion.FromEulerAnglesToRef(0, camera.rotation.y, 0, characterOrientation);
 
             let desiredLinearVelocity = getDesiredVelocity(dt, support, characterOrientation, controller.getVelocity());
+            
 
             character.rotationQuaternion?.copyFrom(characterOrientation);
 

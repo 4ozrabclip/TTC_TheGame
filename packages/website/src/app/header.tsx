@@ -23,7 +23,7 @@ export const Header = () => {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 {menu.map((menu_item) => (
-                    <Link href={menu_item.path}>
+                    <Link href={menu_item.path} key={menu_item.path}>
                         <div style={{ 
                             cursor: 'pointer',
                             borderBottom: menu_item.segment == segment ? '1px solid black' : undefined
